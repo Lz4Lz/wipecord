@@ -5,12 +5,11 @@ import (
 	"time"
 
 	"purge/internal/discord"
+	"purge/internal/purge"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
-
-type DiscordUpdateMsg discord.Update
 
 type PurgeModel struct {
 	err           error
@@ -56,76 +55,73 @@ func (m *PurgeModel) waitForMsg() tea.Cmd {
 	}
 }
 
-func pumpUpdates(updates <-chan discord.Update, msgChan chan tea.Msg) {
-	go func() {
-		defer close(msgChan)
-		for update := range updates {
-			msgChan <- DiscordUpdateMsg(update)
-		}
-	}()
-}
-
 func (m *PurgeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyEsc, tea.KeyCtrlC:
 			return m, tea.Quit
+
 		case tea.KeyEnter:
 			if m.msgChan != nil || m.done {
 				return m, nil
 			}
-			updates := make(chan discord.Update)
+
 			m.msgChan = make(chan tea.Msg)
 			m.status = "Starting purge..."
 
 			go func() {
-				if err := m.Client.PurgeOwnDM(m.dmid, updates); err != nil {
+				purger, _ := purge.NewPurger(m.Client)
+
+				err := purger.Purge(m.dmid, func(u purge.Update) {
+					m.msgChan <- u
+				})
+
+				if err != nil {
 					m.msgChan <- errMsg(err)
 				}
+				close(m.msgChan)
 			}()
 
-			pumpUpdates(updates, m.msgChan)
 			return m, m.waitForMsg()
 		}
-
-	case DiscordUpdateMsg:
-		u := discord.Update(msg)
-
-		switch u.Type {
-		case discord.UpdateDeleted:
-			m.lastDeleted = truncate(u.Content, 50)
-			m.deletedCount++
-
-		case discord.UpdateFailed:
-			m.failedCount++
-			m.status = truncate(u.Message, 60)
-
-		case discord.UpdateRateLimited:
-			m.timeout = u.Timeout
-			m.status = fmt.Sprintf("Rate limited. Waiting %s", u.Timeout)
-		case discord.UpdateAdjust:
-			m.status = fmt.Sprintf("Adjusted delay to %s", u.Delay)
-		case discord.UpdateDelay:
-			m.delay = u.Delay
-
-		case discord.UpdateDone:
-			m.done = true
-			m.deletedCount = u.Deleted
-			m.failedCount = u.Failed
-			m.status = fmt.Sprintf("Purge completed. Deleted: %d, Failed: %d, Throttled: %d",
-				u.Deleted, u.Failed, u.Throttled)
-		}
-
-		return m, m.waitForMsg()
 
 	case errMsg:
 		m.err = msg
 		m.done = true
 		return m, tea.Quit
+
+	case purge.Update:
+		switch u := msg.(type) {
+
+		case purge.UpdateDeleted:
+			m.lastDeleted = truncate(u.Content, 50)
+			m.deletedCount++
+
+		case purge.UpdateFailed:
+			m.failedCount++
+			m.status = truncate(u.Message, 60)
+
+		case purge.UpdateRateLimited:
+			m.timeout = u.Timeout
+			m.status = fmt.Sprintf("Rate limited. Waiting %s", u.Timeout)
+
+		case purge.UpdateDone:
+			m.done = true
+			m.deletedCount = u.Deleted
+			m.failedCount = u.Failed
+			m.status = fmt.Sprintf(
+				"Purge completed. Deleted: %d, Failed: %d, Throttled: %d",
+				u.Deleted, u.Failed, u.Throttled)
+
+		}
+
+		return m, m.waitForMsg()
 	}
 
 	return m, nil
@@ -133,6 +129,7 @@ func (m *PurgeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *PurgeModel) View() string {
 	var status string
+
 	if m.done {
 		status = fmt.Sprintf(
 			"Purge completed.\nDeleted: %d\nFailed: %d\nLast message: %s\nDelay: %s\nTimeout: %s\nStatus: %s\n\n[Esc]: quit",
@@ -167,7 +164,11 @@ func (m *PurgeModel) View() string {
 		return style.Render(status) + "\n" + errStyle.Render("Error: "+m.err.Error())
 	}
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(status))
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		style.Render(status),
+	)
 }
 
 func truncate(s string, max int) string {

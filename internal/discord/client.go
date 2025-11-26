@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -87,8 +88,24 @@ func (c *Client) FetchCurrentUser() error {
 	return nil
 }
 
+func parseRateLimit(resp *http.Response) RateLimit {
+	rl := RateLimit{}
+
+	if s := resp.Header.Get("X-RateLimit-Remaining"); s != "" {
+		rl.Remaining, _ = strconv.Atoi(s)
+	}
+
+	if s := resp.Header.Get("X-RateLimit-Reset-After"); s != "" {
+		if v, err := strconv.ParseFloat(s, 64); err == nil {
+			rl.ResetAfter = time.Duration(v * float64(time.Second))
+		}
+	}
+
+	return rl
+}
+
 /* Pagnation support if beforeID is set */
-func (c *Client) FetchMessages(channelID, beforeID string) ([]Message, error) {
+func (c *Client) FetchMessages(channelID, beforeID string) ([]Message, RateLimit, error) {
 
 	endpoint := fmt.Sprintf("/channels/%s/messages?limit=100", channelID)
 
@@ -98,62 +115,68 @@ func (c *Client) FetchMessages(channelID, beforeID string) ([]Message, error) {
 
 	resp, err := c.Request("GET", endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-
-	if resp.StatusCode == 429 {
-		var body struct {
-			RetryAfter float64 `json:"retry_after"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return nil, fmt.Errorf("rate limited but failed to parse retry_after: %w", err)
-		}
-
-		return nil, RateLimitError{RetryAfter: time.Duration(body.RetryAfter * float64(time.Second))}
+		return nil, RateLimit{}, fmt.Errorf("failed to send request: %w", err)
 	}
 
 	defer resp.Body.Close()
 
+	rl := parseRateLimit(resp)
+
+	if resp.StatusCode == 429 {
+		var data struct {
+			RetryAfter float64 `json:"retry_after"`
+		}
+
+		json.NewDecoder(resp.Body).Decode(&data)
+
+		rl.Hit = true
+		rl.RetryAfter = time.Duration(data.RetryAfter * float64(time.Second))
+
+		return nil, rl, nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get messages: status %s", resp.Status)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, rl, fmt.Errorf("failed to get messages: %s (%s)", resp.Status, body)
 	}
 
 	var messages []Message
 	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
-		return nil, err
+		return nil, rl, err
 	}
 
-	return messages, nil
+	return messages, rl, nil
 }
 
-func (c *Client) DeleteMessage(channelID string, msg Message) error {
+func (c *Client) DeleteMessage(channelID string, msg Message) (RateLimit, error) {
 
 	resp, err := c.Request("DELETE", fmt.Sprintf("/channels/%s/messages/%s", channelID, msg.ID), nil)
 
 	if err != nil {
-		return err
+		return RateLimit{}, err
 	}
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 429 {
+	rl := parseRateLimit(resp)
 
-		var body struct {
+	if resp.StatusCode == 429 {
+		var data struct {
 			RetryAfter float64 `json:"retry_after"`
 		}
+		json.NewDecoder(resp.Body).Decode(&data)
 
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return fmt.Errorf("rate limited but failed to parse retry_after: %w", err)
-		}
+		rl.Hit = true
+		rl.RetryAfter = time.Duration(data.RetryAfter * float64(time.Second))
 
-		return RateLimitError{RetryAfter: time.Duration(body.RetryAfter * float64(time.Second))}
+		return rl, nil
 	}
 
-	if resp.StatusCode != 204 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("error %s: %s", resp.Status, string(body))
+	if resp.StatusCode == http.StatusNoContent {
+		return rl, nil
 	}
 
-	return nil
+	body, _ := io.ReadAll(resp.Body)
+	return rl, fmt.Errorf("delete failed: %s (%s)", resp.Status, body)
+
 }

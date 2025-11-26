@@ -29,6 +29,13 @@ type RateLimitError struct {
 	RetryAfter time.Duration
 }
 
+type RateLimit struct {
+	RetryAfter time.Duration
+	Remaining  int
+	ResetAfter time.Duration
+	Hit        bool
+}
+
 type Profile struct {
 	ID            string `json:"id"`
 	Username      string `json:"username"`

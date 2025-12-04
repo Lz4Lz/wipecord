@@ -25,7 +25,7 @@ type DMSelector struct {
 }
 
 func NewDMSelector(client *discord.Client) *DMSelector {
-	//client := discord.NewClient(tkn)
+
 	err := client.FetchDMS()
 
 	if err != nil {
@@ -116,10 +116,13 @@ func (m *DMSelector) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				parts := strings.Split(selected, ": ")
 				if len(parts) == 2 {
 					m.selectedDMID = parts[1]
-					fmt.Println("Selected DM ID:", m.selectedDMID) // For debug
 				}
-				PurgeModel := NewPurgeModel(m.selectedDMID, m.Client)
-				return PurgeModel, nil
+
+				settings := NewSettingsModel(m.Client)
+				settings.SetChannelID(m.selectedDMID)
+
+				return settings, nil
+
 			}
 
 		default:

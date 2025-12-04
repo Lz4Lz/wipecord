@@ -18,10 +18,12 @@ type PurgeModel struct {
 	Client        *discord.Client
 	msgChan       chan tea.Msg
 
+	Filters      []string
+	SearchDelay  time.Duration
+	DeleteDelay  time.Duration
 	deletedCount int
 	failedCount  int
 	lastDeleted  string
-	delay        time.Duration
 	timeout      time.Duration
 	status       string
 	done         bool
@@ -76,7 +78,20 @@ func (m *PurgeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Starting purge..."
 
 			go func() {
+
 				purger, _ := purge.NewPurger(m.Client)
+
+				if len(m.Filters) > 0 {
+					purger.SetFilters(m.Filters)
+				}
+
+				if m.SearchDelay > 0 {
+					purger.SetSearchDelay(m.SearchDelay)
+				}
+
+				if m.DeleteDelay > 0 {
+					purger.SetDeleteDelay(m.DeleteDelay)
+				}
 
 				err := purger.Purge(m.dmid, func(u purge.Update) {
 					m.msgChan <- u
@@ -118,7 +133,6 @@ func (m *PurgeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf(
 				"Purge completed. Deleted: %d, Failed: %d, Throttled: %d",
 				u.Deleted, u.Failed, u.Throttled)
-
 		}
 
 		return m, m.waitForMsg()
@@ -127,47 +141,42 @@ func (m *PurgeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// Very ugly view, will make the TUI look better in future.
 func (m *PurgeModel) View() string {
-	var status string
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0AFF")).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#BA55D3"))
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF3333")).Bold(true)
+
+	lines := []string{
+		fmt.Sprintf("%s %s", labelStyle.Render("Deleted:"), valueStyle.Render(fmt.Sprintf("%d", m.deletedCount))),
+		fmt.Sprintf("%s %s", labelStyle.Render("Failed:"), valueStyle.Render(fmt.Sprintf("%d", m.failedCount))),
+		fmt.Sprintf("%s %s", labelStyle.Render("Last Msg:"), valueStyle.Render(truncate(m.lastDeleted, 40))),
+		fmt.Sprintf("%s %s", labelStyle.Render("Delete Delay:"), valueStyle.Render(m.DeleteDelay.String())),
+		fmt.Sprintf("%s %s", labelStyle.Render("Search Delay:"), valueStyle.Render(m.SearchDelay.String())),
+		fmt.Sprintf("%s %s", labelStyle.Render("Timeout:"), valueStyle.Render(m.timeout.String())),
+		fmt.Sprintf("%s %s", labelStyle.Render("Status:"), valueStyle.Render(truncate(m.status, 60))),
+	}
 
 	if m.done {
-		status = fmt.Sprintf(
-			"Purge completed.\nDeleted: %d\nFailed: %d\nLast message: %s\nDelay: %s\nTimeout: %s\nStatus: %s\n\n[Esc]: quit",
-			m.deletedCount,
-			m.failedCount,
-			m.lastDeleted,
-			m.delay,
-			m.timeout,
-			m.status,
-		)
-	} else {
-		status = fmt.Sprintf(
-			"Purging...\nDeleted: %d\nFailed: %d\nLast message: %s\nDelay: %s\nTimeout: %s\nStatus: %s\n\n[Enter]: start | [Esc]: quit",
-			m.deletedCount,
-			m.failedCount,
-			m.lastDeleted,
-			m.delay,
-			m.timeout,
-			m.status,
-		)
+		lines = append(lines, labelStyle.Render("[Enter] to quit"))
 	}
-
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#00FFAA")).
-		Bold(true).
-		Padding(1, 2)
 
 	if m.err != nil {
-		errStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF3333")).
-			Bold(true)
-		return style.Render(status) + "\n" + errStyle.Render("Error: "+m.err.Error())
+		lines = append(lines, errStyle.Render("Error: "+m.err.Error()))
 	}
+
+	statusBlock := lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	container := lipgloss.NewStyle().
+		Padding(1, 3).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("129")).
+		Render(statusBlock)
 
 	return lipgloss.Place(
 		m.width, m.height,
 		lipgloss.Center, lipgloss.Center,
-		style.Render(status),
+		container,
 	)
 }
 

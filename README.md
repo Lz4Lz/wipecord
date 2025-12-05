@@ -14,19 +14,15 @@ Wipecord allows you to wipe your messages in a DM of your choice.
 1. Clone this repository
 
 ```
-
 git clone https://github.com/Lz4Lz/wipecord
 
 cd wipecord
-
 ```
 
 2. Run
 
 ```
-
 go run cmd/main.go
-
 ```
 
   

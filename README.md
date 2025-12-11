@@ -52,12 +52,14 @@ Simply put your authentication token in the login menu, and choose a DM. You can
 
   
 
-## Improvements
+## Planned Improvements
+Future updates include:
 
-Will try to fix ratelimit issues in the future, without slowing down the deletion process.
+* Server Selection: Ability to choose and delete messages from specific servers.
 
-If you want to increase the speed, edit the variable ```deleteDelay``` in internal/discord/purge.go. Note that this will increase ratelimits, and will eventually throttle you.
+* Enhanced TUI: Improved text user interface with additional details and functionality.
 
+* Progress Tracking: Ability to save your progress, so you don’t have to search through all your messages in case of an interruption.
   
 
 ## Contributing
